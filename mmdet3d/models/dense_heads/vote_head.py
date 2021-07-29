@@ -11,6 +11,7 @@ from mmdet3d.ops import build_sa_module, furthest_point_sample
 from mmdet.core import build_bbox_coder, multi_apply
 from mmdet.models import HEADS
 from .base_conv_bbox_head import BaseConvBboxHead
+from sklearn.neighbors import KDTree
 
 
 @HEADS.register_module()
@@ -77,6 +78,7 @@ class VoteHead(BaseModule):
             self.iou_loss = build_loss(iou_loss)
         else:
             self.iou_loss = None
+        self.keypoint_contrastive_loss = build_loss({'type': 'SupConLoss'})
 
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.num_sizes = self.bbox_coder.num_sizes
@@ -215,6 +217,10 @@ class VoteHead(BaseModule):
 
         results.update(decode_res)
 
+        if 'keypoint_xyz' in feat_dict:
+            results['keypoint_xyz'] = feat_dict['keypoint_xyz']
+            results['keypoint_features'] = feat_dict['keypoint_features']
+
         return results
 
     @force_fp32(apply_to=('bbox_preds', ))
@@ -262,6 +268,18 @@ class VoteHead(BaseModule):
                                               bbox_preds['vote_points'],
                                               bbox_preds['seed_indices'],
                                               vote_target_masks, vote_targets)
+
+        # calculate keypoints contrastive loss
+        bat_size, num_pts, _ = bbox_preds['keypoint_xyz'].shape
+        keypoint_contrastive_loss = torch.zeros(1).cuda()
+        for batch_index in range(bat_size):
+            keypoint_instance_labels = torch.zeros((num_pts, 1), device=bbox_preds['keypoint_xyz'].device)
+            pointcloud_kdtree = KDTree(points[batch_index][:, :3].cpu().numpy())
+            _, keypoint_idxs = pointcloud_kdtree.query(bbox_preds['keypoint_xyz'][batch_index, ...].cpu().numpy(), k=1)
+            keypoint_instance_labels = pts_instance_mask[batch_index][keypoint_idxs]
+            keypoint_contrastive_loss += self.keypoint_contrastive_loss(
+                bbox_preds['keypoint_features'][batch_index, ...].permute(1, 0).unsqueeze(dim=1), labels=keypoint_instance_labels
+            )
 
         # calculate objectness loss
         objectness_loss = self.objectness_loss(
@@ -328,7 +346,8 @@ class VoteHead(BaseModule):
             dir_class_loss=dir_class_loss,
             dir_res_loss=dir_res_loss,
             size_class_loss=size_class_loss,
-            size_res_loss=size_res_loss)
+            size_res_loss=size_res_loss,
+            keypoint_contrastive_loss=keypoint_contrastive_loss)
 
         if self.iou_loss:
             corners_pred = self.bbox_coder.decode_corners(

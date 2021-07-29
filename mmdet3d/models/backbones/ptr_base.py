@@ -426,6 +426,6 @@ class Pointformer(nn.Module):
             fp_xyz.append(sa_xyz[self.num_sa - i - 1])
             fp_indices.append(sa_indices[self.num_sa - i - 1])
 
-        ret = dict(fp_xyz=fp_xyz, fp_features=fp_features, fp_indices=fp_indices)
+        ret = dict(fp_xyz=fp_xyz, fp_features=fp_features, fp_indices=fp_indices, keypoint_xyz=sa_xyz[2], keypoint_features=sa_features[2])
         
         return ret
