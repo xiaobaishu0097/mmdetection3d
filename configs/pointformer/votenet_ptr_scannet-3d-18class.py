@@ -49,7 +49,10 @@ model = dict(
                         [0.50867593, 0.50656086, 0.30136237],
                         [1.1511526, 1.0546296, 0.49706793],
                         [0.47535285, 0.49249494, 0.5802117]]
-        )
+        ),
+        # keypoint_contrastive_loss=dict(
+        #     type='SupConLoss',
+        # )
     )
 )
 optimizer = dict(type='AdamW', lr=2e-3, weight_decay=1e-1)

@@ -57,6 +57,7 @@ class VoteHead(BaseModule):
                  size_res_loss=None,
                  semantic_loss=None,
                  iou_loss=None,
+                 keypoint_contrastive_loss=None,
                  init_cfg=None):
         super(VoteHead, self).__init__(init_cfg=init_cfg)
         self.num_classes = num_classes
@@ -78,7 +79,10 @@ class VoteHead(BaseModule):
             self.iou_loss = build_loss(iou_loss)
         else:
             self.iou_loss = None
-        self.keypoint_contrastive_loss = build_loss({'type': 'SupConLoss'})
+        if keypoint_contrastive_loss is not None:
+            self.keypoint_contrastive_loss = build_loss(keypoint_contrastive_loss)
+        else:
+            self.keypoint_contrastive_loss = None
 
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.num_sizes = self.bbox_coder.num_sizes
@@ -269,18 +273,6 @@ class VoteHead(BaseModule):
                                               bbox_preds['seed_indices'],
                                               vote_target_masks, vote_targets)
 
-        # calculate keypoints contrastive loss
-        bat_size, num_pts, _ = bbox_preds['keypoint_xyz'].shape
-        keypoint_contrastive_loss = torch.zeros(1).cuda()
-        for batch_index in range(bat_size):
-            keypoint_instance_labels = torch.zeros((num_pts, 1), device=bbox_preds['keypoint_xyz'].device)
-            pointcloud_kdtree = KDTree(points[batch_index][:, :3].cpu().numpy())
-            _, keypoint_idxs = pointcloud_kdtree.query(bbox_preds['keypoint_xyz'][batch_index, ...].cpu().numpy(), k=1)
-            keypoint_instance_labels = pts_instance_mask[batch_index][keypoint_idxs]
-            keypoint_contrastive_loss += self.keypoint_contrastive_loss(
-                bbox_preds['keypoint_features'][batch_index, ...].permute(1, 0).unsqueeze(dim=1), labels=keypoint_instance_labels
-            )
-
         # calculate objectness loss
         objectness_loss = self.objectness_loss(
             bbox_preds['obj_scores'].transpose(2, 1),
@@ -346,8 +338,7 @@ class VoteHead(BaseModule):
             dir_class_loss=dir_class_loss,
             dir_res_loss=dir_res_loss,
             size_class_loss=size_class_loss,
-            size_res_loss=size_res_loss,
-            keypoint_contrastive_loss=keypoint_contrastive_loss)
+            size_res_loss=size_res_loss)
 
         if self.iou_loss:
             corners_pred = self.bbox_coder.decode_corners(
@@ -359,6 +350,20 @@ class VoteHead(BaseModule):
             iou_loss = self.iou_loss(
                 corners_pred, corners_target, weight=box_loss_weights)
             losses['iou_loss'] = iou_loss
+
+        # calculate keypoints contrastive loss
+        if self.keypoint_contrastive_loss:
+            bat_size, num_pts, _ = bbox_preds['keypoint_xyz'].shape
+            keypoint_contrastive_loss = torch.zeros(1).cuda()
+            for batch_index in range(bat_size):
+                keypoint_instance_labels = torch.zeros((num_pts, 1), device=bbox_preds['keypoint_xyz'].device)
+                pointcloud_kdtree = KDTree(points[batch_index][:, :3].cpu().numpy())
+                _, keypoint_idxs = pointcloud_kdtree.query(bbox_preds['keypoint_xyz'][batch_index, ...].cpu().numpy(), k=1)
+                keypoint_instance_labels = pts_instance_mask[batch_index][keypoint_idxs]
+                keypoint_contrastive_loss += self.keypoint_contrastive_loss(
+                    bbox_preds['keypoint_features'][batch_index, ...].permute(1, 0).unsqueeze(dim=1), labels=keypoint_instance_labels
+                )
+            losses['keypoint_contrastive_loss'] = keypoint_contrastive_loss
 
         if ret_target:
             losses['targets'] = targets
